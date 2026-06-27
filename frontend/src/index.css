@@ -1,0 +1,198 @@
+:root {
+  --paper: #f7f5ef;
+  --page-bg: #e9e5db;
+  --ink: #1f1d1a;
+  --line: #cdc7ba;
+  --muted: #9a9384;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page-bg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+}
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+}
+
+/* The "paper" card with a stacked-sheet shadow, like the image. */
+.paper {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  padding: 30px 32px 40px;
+  box-shadow: 8px 8px 0 -1px var(--paper), 8px 8px 0 0 var(--ink);
+}
+
+.sparkles {
+  display: block;
+  width: 200px;
+  max-width: 70%;
+  margin: 0 auto 6px;
+  color: var(--ink);
+}
+
+.title {
+  text-align: center;
+  font-size: 30px;
+  letter-spacing: 8px;
+  font-weight: 800;
+  margin: 4px 0 26px;
+}
+
+/* Add-task row */
+.add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.add-input {
+  flex: 1;
+  border: none;
+  border-bottom: 1.5px solid var(--ink);
+  background: transparent;
+  padding: 8px 4px;
+  font-size: 15px;
+  outline: none;
+  color: var(--ink);
+}
+
+.add-input::placeholder {
+  color: var(--muted);
+}
+
+.add-btn {
+  width: 38px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  border-radius: 6px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.add-btn:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* The list */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--line);
+  min-height: 46px;
+}
+
+/* Square checkbox */
+.check {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--paper);
+  padding: 0;
+}
+
+.check.checked {
+  background: var(--ink);
+}
+
+.text {
+  flex: 1;
+  font-size: 16px;
+  word-break: break-word;
+}
+
+.item.done .text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.edit-input {
+  flex: 1;
+  border: none;
+  border-bottom: 1px solid var(--ink);
+  background: transparent;
+  font-size: 16px;
+  padding: 2px 0;
+  outline: none;
+  color: var(--ink);
+}
+
+/* Edit / delete buttons appear on hover */
+.actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.item:hover .actions {
+  opacity: 1;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.icon-btn:hover {
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Blank filler rows */
+.item.empty {
+  pointer-events: none;
+}
+
+.item.empty .check {
+  opacity: 0.45;
+}
+
+.error {
+  color: #b00020;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 12px;
+}

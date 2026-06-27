@@ -1,0 +1,14 @@
+# Backend
+backend/todo-backend
+backend/*.db
+
+# Frontend
+frontend/node_modules
+frontend/dist
+frontend/.env
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode
+*.log
