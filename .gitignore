@@ -1,5 +1,6 @@
 # Backend
 backend/todo-backend
+backend/subscriber/subscriber
 backend/*.db
 
 # Frontend

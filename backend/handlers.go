@@ -8,9 +8,11 @@ import (
 	"strings"
 )
 
-// API holds the dependencies the HTTP handlers need (here, just the store).
+// API holds the dependencies the HTTP handlers need: the store ("DB")
+// and the event publisher (NATS).
 type API struct {
 	store *Store
+	pub   *EventPublisher
 }
 
 // --- small helpers -------------------------------------------------------
@@ -26,6 +28,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // --- handlers (one per REST endpoint) ------------------------------------
+//
+// Each mutating handler does its REST work first, then publishes a NATS
+// event. The HTTP response does NOT depend on the event: publishing is
+// fire-and-forget, so a slow or missing broker never blocks the user.
 
 // GET /api/todos  ->  list every todo
 func (a *API) listTodos(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +52,10 @@ func (a *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title is required")
 		return
 	}
-	writeJSON(w, http.StatusCreated, a.store.Create(title))
+
+	todo := a.store.Create(title)
+	a.pub.Publish("created", todo)
+	writeJSON(w, http.StatusCreated, todo)
 }
 
 // PUT /api/todos/{id}  ->  update title + done (covers "modify" and "finish")
@@ -80,6 +89,8 @@ func (a *API) updateTodo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	a.pub.Publish("updated", todo)
 	writeJSON(w, http.StatusOK, todo)
 }
 
@@ -90,7 +101,9 @@ func (a *API) deleteTodo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := a.store.Delete(id); err != nil {
+
+	todo, err := a.store.Delete(id)
+	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "todo not found")
 			return
@@ -98,5 +111,7 @@ func (a *API) deleteTodo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	a.pub.Publish("deleted", todo)
 	w.WriteHeader(http.StatusNoContent)
 }

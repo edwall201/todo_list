@@ -14,10 +14,17 @@ func main() {
 	store.Create("Double-click a task (or the pencil) to edit it")
 	store.Create("Press the + to add your own")
 
-	// 2. The TODO service: HTTP handlers that talk to the store.
-	api := &API{store: store}
+	// 2. The event publisher. Connects to NATS and publishes a
+	//    CloudEvent after every change. If NATS isn't running this is a
+	//    no-op, so the REST API still works on its own.
+	pub := NewEventPublisher()
+	defer pub.Close()
 
-	// 3. Routes. Go 1.22+ lets the standard library router match by
+	// 3. The TODO service: HTTP handlers that talk to the store and
+	//    publish events.
+	api := &API{store: store, pub: pub}
+
+	// 4. Routes. Go 1.22+ lets the standard library router match by
 	//    HTTP method and capture path values like {id}.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/todos", api.listTodos)

@@ -1,22 +1,27 @@
-# TODO List — React + Go (RESTful API)
+# TODO List — React + Go (REST + NATS)
 
-A simple TODO list app. **Phase 1 (this repo): a classic RESTful API.**
-Later phases will swap the transport to **NATS / event-driven / CloudEvents**
-so you can feel the difference between request/response (REST) and
-publish/subscribe (messaging).
+A simple TODO list app, built in phases to compare transports.
+
+- **Phase 1 — RESTful API.** Request/response over HTTP. The browser asks, the service answers.
+- **Phase 2 — NATS events (this version).** The same REST API still serves the browser, but now the service *also* publishes a [CloudEvent](https://cloudevents.io) to NATS after every change. A separate subscriber reacts to those events. Nobody waits.
 
 ```
-┌──────────────┐   HTTP/JSON (REST)   ┌──────────────┐   in-memory   ┌──────────┐
-│  React app   │ ───────────────────► │ TODO service │ ────────────► │  store   │
-│ (frontend)   │ ◄─────────────────── │   (Go)       │ ◄──────────── │ ("DB")   │
-└──────────────┘                      └──────────────┘               └──────────┘
-   :5173                                  :8080
+                                            publish todo.*        ┌──────────────────┐
+┌────────────┐   HTTP/JSON (REST)   ┌──────────────┐   event   ┌─►│ todo-subscriber  │ logs events
+│  React app │ ───────────────────► │ TODO service │ ─────────►│  │  (separate proc) │
+│ (frontend) │ ◄─────────────────── │   (Go)       │           │  └──────────────────┘
+└────────────┘                      └──────────────┘           │
+   :5173                              :8080  │ publish          │ subscribe "todo.>"
+                                            ▼                   │
+                                     ┌───────────────────────────────┐
+                                     │          NATS server          │
+                                     │            :4222              │
+                                     └───────────────────────────────┘
 ```
 
-The store is currently **in-memory**, so todos reset when the Go server
-restarts. It lives behind four methods (`List / Create / Update / Delete`)
-in `backend/store.go`, so you can later replace it with SQLite/Postgres
-without changing any handler.
+The store is **in-memory**, so todos reset when the Go service restarts.
+NATS publishing is **fire-and-forget**: if the broker is down, the REST API
+still works — events are just skipped.
 
 ## Features
 
@@ -25,41 +30,86 @@ without changing any handler.
 - **Finish** a task / toggle done (`PUT /api/todos/{id}`) — click the square box
 - **Delete** a task (`DELETE /api/todos/{id}`) — the ✕ button
 
+Each of the last three also publishes a NATS event.
+
 ## REST API
 
-| Method | Path              | Body                          | Purpose            |
-|--------|-------------------|-------------------------------|--------------------|
-| GET    | `/api/todos`      | —                             | List all todos     |
-| POST   | `/api/todos`      | `{ "title": "..." }`          | Create a todo      |
+| Method | Path              | Body                                | Purpose            |
+|--------|-------------------|-------------------------------------|--------------------|
+| GET    | `/api/todos`      | —                                   | List all todos     |
+| POST   | `/api/todos`      | `{ "title": "..." }`                | Create a todo      |
 | PUT    | `/api/todos/{id}` | `{ "title": "...", "done": false }` | Update title/done  |
-| DELETE | `/api/todos/{id}` | —                             | Delete a todo      |
-| GET    | `/api/health`     | —                             | Health check       |
+| DELETE | `/api/todos/{id}` | —                                   | Delete a todo      |
+| GET    | `/api/health`     | —                                   | Health check       |
+
+## Events (NATS)
+
+| Subject        | Published when…       |
+|----------------|-----------------------|
+| `todo.created` | a todo is created     |
+| `todo.updated` | a todo is modified or finished |
+| `todo.deleted` | a todo is deleted     |
+
+Subscribe to all of them with the wildcard `todo.>`.
+
+Each message is a CloudEvents v1.0 JSON envelope:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "f3a9c1e2b4d5...",
+  "source": "/todo-service",
+  "type": "com.example.todo.created",
+  "time": "2026-06-28T11:44:21Z",
+  "datacontenttype": "application/json",
+  "data": { "id": 4, "title": "Learn NATS", "done": false, "created_at": "2026-06-28T11:44:21Z" }
+}
+```
 
 ## Requirements
 
-- **Go** 1.22 or newer (uses the standard-library method router; no external deps)
+- **Go** 1.25 or newer (the `nats.go` client requires it)
 - **Node.js** 18 or newer + npm
+- A **NATS server** (only needed to see events; the app runs without it)
 
 ## Run it
 
-Open **two terminals**.
+### 1) Start a NATS server
 
-### 1) Backend (Go)
+Pick whichever is easiest:
+
+```bash
+# Docker (most portable)
+docker run --rm -p 4222:4222 nats:latest
+
+# macOS / Homebrew
+brew install nats-server && nats-server
+
+# Go (installs the binary to ~/go/bin)
+go install github.com/nats-io/nats-server/v2@latest && ~/go/bin/nats-server
+```
+
+It listens on `nats://127.0.0.1:4222` by default. To point the app elsewhere,
+set `NATS_URL` for both the service and the subscriber.
+
+### 2) Backend — the TODO service
 
 ```bash
 cd backend
 go run .
+# -> connected to NATS at nats://127.0.0.1:4222 -- publishing todo.* events
 # -> TODO service listening on http://localhost:8080
 ```
 
-Quick test without the frontend:
+### 3) The event subscriber (a second terminal)
 
 ```bash
-curl localhost:8080/api/todos
-curl -X POST localhost:8080/api/todos -H 'Content-Type: application/json' -d '{"title":"Buy milk"}'
+cd backend
+go run ./subscriber
+# -> todo-subscriber listening on nats://127.0.0.1:4222 for "todo.>"
 ```
 
-### 2) Frontend (React + Vite)
+### 4) Frontend — React + Vite (a third terminal)
 
 ```bash
 cd frontend
@@ -68,8 +118,16 @@ npm run dev
 # -> open http://localhost:5173
 ```
 
-The Vite dev server proxies `/api/*` to `http://localhost:8080`, so you
-don't have to deal with CORS or ports during development.
+Now add / finish / edit / delete tasks in the browser and watch the events
+appear in the subscriber's terminal in real time. Or test with curl:
+
+```bash
+curl -X POST localhost:8080/api/todos -H 'Content-Type: application/json' -d '{"title":"Buy milk"}'
+```
+
+> Note: a fresh checkout has no `go.sum`. The first `go run`/`go build`
+> downloads dependencies automatically; you can also run `go mod tidy` to
+> generate it explicitly.
 
 ## Project layout
 
@@ -77,32 +135,41 @@ don't have to deal with CORS or ports during development.
 todo_list/
 ├── backend/
 │   ├── go.mod
-│   ├── main.go        # server setup, routes, CORS, sample data
-│   ├── handlers.go    # one function per REST endpoint
-│   ├── store.go       # in-memory "DB" (swap for SQL later)
-│   └── models.go      # the Todo struct
+│   ├── main.go            # server setup, routes, CORS, sample data
+│   ├── handlers.go        # one function per REST endpoint (+ publish)
+│   ├── store.go           # in-memory "DB"
+│   ├── models.go          # the Todo struct
+│   ├── events.go          # NATS publisher + CloudEvents envelope
+│   └── subscriber/
+│       └── main.go        # standalone program that logs todo.* events
 └── frontend/
     ├── package.json
-    ├── vite.config.js # dev server + /api proxy
+    ├── vite.config.js     # dev server + /api proxy
     ├── index.html
     └── src/
-        ├── main.jsx   # React entry point
-        ├── App.jsx    # the whole UI (add / edit / finish / delete)
-        ├── api.js     # the ONLY file that calls the backend
-        └── index.css  # notepad styling
+        ├── main.jsx
+        ├── App.jsx        # the whole UI (add / edit / finish / delete)
+        ├── api.js         # the ONLY file that calls the backend
+        └── index.css      # notepad styling
 ```
 
-## Next step: REST vs NATS
+## REST vs NATS — what actually changed
 
-When you move to NATS, the **store and the React UI barely change** — what
-changes is the line *between* them:
+The browser still talks to the service over REST. What's new is a *second*,
+one-way channel:
 
-- **REST (now):** the frontend asks the service a question and waits for the
-  answer. One caller, one responder, synchronous.
-- **NATS (next):** the service *publishes* an event like `todo.created`, and
-  any number of subscribers react to it. No one waits. This is how you get
-  things like live updates, audit logs, or notifications "for free."
+- **REST** is a conversation: the caller waits for a reply, and exactly one
+  service handles each request.
+- **NATS** is a broadcast: the service announces "a todo was created" and
+  walks away. Zero, one, or many subscribers can react — and you can add or
+  restart subscribers without touching the publisher.
 
-Because every network call is isolated in `frontend/src/api.js` and every
-data operation is isolated in `backend/store.go`, those are the two files
-you'll focus on when introducing messaging.
+That decoupling is the payoff. The `todo-subscriber` shares no code and no
+memory with the service; only the subject name (`todo.created`) connects them.
+
+## Possible next steps
+
+- **JetStream** — turn on NATS persistence so events are stored and can be
+  replayed (a subscriber that starts later still sees past events).
+- **Live UI updates** — expose NATS over WebSocket and subscribe from React,
+  so a change in one browser tab instantly updates every other tab.

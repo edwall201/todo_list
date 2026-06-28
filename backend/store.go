@@ -76,14 +76,16 @@ func (s *Store) Update(id int64, title string, done bool) (Todo, error) {
 	return t, nil
 }
 
-// Delete removes a todo by id.
-func (s *Store) Delete(id int64) error {
+// Delete removes a todo by id and returns the deleted todo, so the
+// caller can include it in a "todo.deleted" event.
+func (s *Store) Delete(id int64) (Todo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.todos[id]; !ok {
-		return ErrNotFound
+	t, ok := s.todos[id]
+	if !ok {
+		return Todo{}, ErrNotFound
 	}
 	delete(s.todos, id)
-	return nil
+	return t, nil
 }
