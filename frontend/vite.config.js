@@ -1,16 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// During development the React app runs on http://localhost:5173.
-// The `proxy` below forwards any request starting with /api to the Go
-// service on http://localhost:8080, so the frontend can just call
-// "/api/todos" and never worry about CORS or ports.
+// The frontend now talks to the backend over NATS (WebSocket), not HTTP,
+// so there is no longer an /api proxy. The NATS server URL lives in
+// src/api.js (default ws://localhost:8080, see nats.conf).
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: {
-      '/api': 'http://localhost:8080',
-    },
   },
 })

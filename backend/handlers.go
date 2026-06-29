@@ -3,115 +3,119 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"net/http"
-	"strconv"
+	"log"
 	"strings"
+
+	"github.com/nats-io/nats.go"
 )
 
-// API holds the dependencies the HTTP handlers need: the store ("DB")
-// and the event publisher (NATS).
-type API struct {
+// Service handles incoming NATS *command* messages and replies to them.
+// It replaces the old HTTP handlers: instead of (w http.ResponseWriter,
+// r *http.Request) each handler now takes a *nats.Msg and answers with
+// msg.Respond(...).
+type Service struct {
 	store *Store
-	pub   *EventPublisher
+	nc    *nats.Conn
 }
 
-// --- small helpers -------------------------------------------------------
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+// Reply is the envelope every command reply uses. NATS has no HTTP status
+// codes, so we carry success/failure in the payload ourselves.
+type Reply struct {
+	OK    bool   `json:"ok"`
+	Data  any    `json:"data,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+func (s *Service) respond(msg *nats.Msg, r Reply) {
+	payload, err := json.Marshal(r)
+	if err != nil {
+		log.Printf("marshal reply: %v", err)
+		return
+	}
+	if err := msg.Respond(payload); err != nil {
+		log.Printf("respond on %s: %v", msg.Subject, err)
+	}
 }
 
-// --- handlers (one per REST endpoint) ------------------------------------
-//
-// Each mutating handler does its REST work first, then publishes a NATS
-// event. The HTTP response does NOT depend on the event: publishing is
-// fire-and-forget, so a slow or missing broker never blocks the user.
+func (s *Service) ok(msg *nats.Msg, data any)   { s.respond(msg, Reply{OK: true, Data: data}) }
+func (s *Service) fail(msg *nats.Msg, e string) { s.respond(msg, Reply{OK: false, Error: e}) }
 
-// GET /api/todos  ->  list every todo
-func (a *API) listTodos(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.List())
+// todo.cmd.list  ->  reply with every todo
+func (s *Service) handleList(msg *nats.Msg) {
+	s.ok(msg, s.store.List())
 }
 
-// POST /api/todos  ->  create a todo from {"title": "..."}
-func (a *API) createTodo(w http.ResponseWriter, r *http.Request) {
+// todo.cmd.create  {title}  ->  create, broadcast event, reply with new todo
+func (s *Service) handleCreate(msg *nats.Msg) {
 	var body struct {
 		Title string `json:"title"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if err := json.Unmarshal(msg.Data, &body); err != nil {
+		s.fail(msg, "invalid JSON body")
 		return
 	}
 	title := strings.TrimSpace(body.Title)
 	if title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
+		s.fail(msg, "title is required")
 		return
 	}
 
-	todo := a.store.Create(title)
-	a.pub.Publish("created", todo)
-	writeJSON(w, http.StatusCreated, todo)
+	todo := s.store.Create(title)
+	publishEvent(s.nc, "created", todo)
+	s.ok(msg, todo)
 }
 
-// PUT /api/todos/{id}  ->  update title + done (covers "modify" and "finish")
-func (a *API) updateTodo(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-
+// todo.cmd.update  {id,title,done}  ->  update, broadcast event, reply
+func (s *Service) handleUpdate(msg *nats.Msg) {
 	var body struct {
+		ID    int64  `json:"id"`
 		Title string `json:"title"`
 		Done  bool   `json:"done"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if err := json.Unmarshal(msg.Data, &body); err != nil {
+		s.fail(msg, "invalid JSON body")
 		return
 	}
 	title := strings.TrimSpace(body.Title)
 	if title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
+		s.fail(msg, "title is required")
 		return
 	}
 
-	todo, err := a.store.Update(id, title, body.Done)
+	todo, err := s.store.Update(body.ID, title, body.Done)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			writeError(w, http.StatusNotFound, "todo not found")
+			s.fail(msg, "todo not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.fail(msg, err.Error())
 		return
 	}
 
-	a.pub.Publish("updated", todo)
-	writeJSON(w, http.StatusOK, todo)
+	publishEvent(s.nc, "updated", todo)
+	s.ok(msg, todo)
 }
 
-// DELETE /api/todos/{id}  ->  remove a todo
-func (a *API) deleteTodo(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+// todo.cmd.delete  {id}  ->  delete, broadcast event, reply
+func (s *Service) handleDelete(msg *nats.Msg) {
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(msg.Data, &body); err != nil {
+		s.fail(msg, "invalid JSON body")
 		return
 	}
 
-	todo, err := a.store.Delete(id)
+	todo, err := s.store.Delete(body.ID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			writeError(w, http.StatusNotFound, "todo not found")
+			s.fail(msg, "todo not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.fail(msg, err.Error())
 		return
 	}
 
-	a.pub.Publish("deleted", todo)
-	w.WriteHeader(http.StatusNoContent)
+	publishEvent(s.nc, "deleted", todo)
+	s.ok(msg, todo)
 }

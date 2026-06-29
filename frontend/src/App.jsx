@@ -51,6 +51,22 @@ export default function App() {
     refresh()
   }, [])
 
+  // Live updates: when ANY client changes a todo, the service broadcasts
+  // a NATS event on todo.event.*. We just re-fetch so every open tab
+  // stays in sync — this is the payoff of going fully event-driven.
+  useEffect(() => {
+    let sub
+    api
+      .onTodoEvent(() => refresh())
+      .then((s) => {
+        sub = s
+      })
+      .catch(() => {})
+    return () => {
+      if (sub) sub.unsubscribe()
+    }
+  }, [])
+
   async function refresh() {
     try {
       setLoading(true)

@@ -39,9 +39,9 @@ func main() {
 	}
 	defer nc.Drain()
 
-	// "todo.>" is a wildcard that matches todo.created, todo.updated,
-	// todo.deleted, and anything else under "todo.".
-	_, err = nc.Subscribe("todo.>", func(m *nats.Msg) {
+	// "todo.event.>" is a wildcard that matches todo.event.created,
+	// todo.event.updated, todo.event.deleted, and anything else under it.
+	_, err = nc.Subscribe("todo.event.>", func(m *nats.Msg) {
 		var e event
 		if err := json.Unmarshal(m.Data, &e); err != nil {
 			log.Printf("[%s] %s", m.Subject, string(m.Data))
@@ -54,7 +54,7 @@ func main() {
 		log.Fatalf("subscribe: %v", err)
 	}
 
-	log.Printf("todo-subscriber listening on %s for \"todo.>\"  (Ctrl+C to quit)", url)
+	log.Printf("todo-subscriber listening on %s for \"todo.event.>\"  (Ctrl+C to quit)", url)
 
 	// Block until the user hits Ctrl+C.
 	sig := make(chan os.Signal, 1)

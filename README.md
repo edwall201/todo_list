@@ -1,175 +1,154 @@
-# TODO List — React + Go (REST + NATS)
+# TODO List — React + Go over NATS (event-driven)
 
 A simple TODO list app, built in phases to compare transports.
 
-- **Phase 1 — RESTful API.** Request/response over HTTP. The browser asks, the service answers.
-- **Phase 2 — NATS events (this version).** The same REST API still serves the browser, but now the service *also* publishes a [CloudEvent](https://cloudevents.io) to NATS after every change. A separate subscriber reacts to those events. Nobody waits.
+- **Phase 1 — REST.** Browser ⇄ service over HTTP request/response.
+- **Phase 2 — REST + events.** Same REST, but the service also published NATS events.
+- **Phase 3 — all NATS (this version).** REST/HTTP is **gone**. The browser talks to the backend **only over NATS** (via WebSocket). Commands use **request-reply**; changes are broadcast as **events**, which also drive **live updates across browser tabs**.
 
 ```
-                                            publish todo.*        ┌──────────────────┐
-┌────────────┐   HTTP/JSON (REST)   ┌──────────────┐   event   ┌─►│ todo-subscriber  │ logs events
-│  React app │ ───────────────────► │ TODO service │ ─────────►│  │  (separate proc) │
-│ (frontend) │ ◄─────────────────── │   (Go)       │           │  └──────────────────┘
-└────────────┘                      └──────────────┘           │
-   :5173                              :8080  │ publish          │ subscribe "todo.>"
-                                            ▼                   │
-                                     ┌───────────────────────────────┐
-                                     │          NATS server          │
-                                     │            :4222              │
-                                     └───────────────────────────────┘
+                            request-reply (todo.cmd.*)
+┌────────────┐  WebSocket  ┌──────────────────────┐   TCP   ┌──────────────┐
+│ React app  │ ──────────► │     NATS server      │ ◄─────► │ todo-service │
+│ (nats.ws)  │ ◄────────── │  :4222 tcp / :8080 ws│         │    (Go)      │
+└────────────┘   events    └──────────────────────┘         └──────────────┘
+   :5173      (todo.event.*)        ▲                              │ publish
+                                    │ subscribe todo.event.>       │ todo.event.*
+                                    │                              ▼
+                            ┌──────────────────┐            (broadcast to all)
+                            │  todo-subscriber │
+                            └──────────────────┘
 ```
 
-The store is **in-memory**, so todos reset when the Go service restarts.
-NATS publishing is **fire-and-forget**: if the broker is down, the REST API
-still works — events are just skipped.
+The store is still **in-memory**, so todos reset when the Go service restarts.
 
-## Features
+## How the browser talks to NATS
 
-- **Add** a task (`POST /api/todos`)
-- **Modify** a task's title (`PUT /api/todos/{id}`) — double-click the text or the ✎ button
-- **Finish** a task / toggle done (`PUT /api/todos/{id}`) — click the square box
-- **Delete** a task (`DELETE /api/todos/{id}`) — the ✕ button
+A browser can't speak the native NATS TCP protocol, so:
 
-Each of the last three also publishes a NATS event.
+1. The NATS server is run with **WebSocket** enabled (see `nats.conf`, port 8080).
+2. The frontend uses **`nats.ws`** to connect over `ws://localhost:8080`.
+3. Two messaging patterns are used:
+   - **Commands → request-reply.** The browser `request()`s a subject and waits for the reply. This is what replaces REST.
+   - **Events → publish/subscribe.** The service broadcasts every change; the browser (and the standalone subscriber) listen and react.
 
-## REST API
+## Subjects
 
-| Method | Path              | Body                                | Purpose            |
-|--------|-------------------|-------------------------------------|--------------------|
-| GET    | `/api/todos`      | —                                   | List all todos     |
-| POST   | `/api/todos`      | `{ "title": "..." }`                | Create a todo      |
-| PUT    | `/api/todos/{id}` | `{ "title": "...", "done": false }` | Update title/done  |
-| DELETE | `/api/todos/{id}` | —                                   | Delete a todo      |
-| GET    | `/api/health`     | —                                   | Health check       |
+**Commands (request-reply):** the browser sends, the service replies.
 
-## Events (NATS)
+| Subject           | Body                          | Reply (`data`)      |
+|-------------------|-------------------------------|---------------------|
+| `todo.cmd.list`   | `{}`                          | array of todos      |
+| `todo.cmd.create` | `{ "title": "..." }`          | the new todo        |
+| `todo.cmd.update` | `{ "id", "title", "done" }`   | the updated todo    |
+| `todo.cmd.delete` | `{ "id": 1 }`                 | the deleted todo    |
 
-| Subject        | Published when…       |
-|----------------|-----------------------|
-| `todo.created` | a todo is created     |
-| `todo.updated` | a todo is modified or finished |
-| `todo.deleted` | a todo is deleted     |
-
-Subscribe to all of them with the wildcard `todo.>`.
-
-Each message is a CloudEvents v1.0 JSON envelope:
+Because NATS has no HTTP status codes, every reply uses an envelope:
 
 ```json
-{
-  "specversion": "1.0",
-  "id": "f3a9c1e2b4d5...",
-  "source": "/todo-service",
-  "type": "com.example.todo.created",
-  "time": "2026-06-28T11:44:21Z",
-  "datacontenttype": "application/json",
-  "data": { "id": 4, "title": "Learn NATS", "done": false, "created_at": "2026-06-28T11:44:21Z" }
-}
+{ "ok": true,  "data": { ... } }
+{ "ok": false, "error": "title is required" }
 ```
+
+**Events (publish/subscribe):** the service announces, anyone can listen. Match all with `todo.event.>`.
+
+| Subject               | Published when…                |
+|-----------------------|--------------------------------|
+| `todo.event.created`  | a todo is created              |
+| `todo.event.updated`  | a todo is modified or finished |
+| `todo.event.deleted`  | a todo is deleted              |
+
+Each event is a CloudEvents v1.0 JSON envelope (`specversion`, `id`, `source`, `type`, `time`, `data`).
 
 ## Requirements
 
-- **Go** 1.25 or newer (the `nats.go` client requires it)
+- **Go** 1.25 or newer
 - **Node.js** 18 or newer + npm
-- A **NATS server** (only needed to see events; the app runs without it)
+- A **NATS server** — now **required** (it's the only transport), and it must have WebSocket enabled. The included `nats.conf` does that.
 
 ## Run it
 
-### 1) Start a NATS server
-
-Pick whichever is easiest:
+### 1) NATS server (with WebSocket)
 
 ```bash
-# Docker (most portable)
-docker run --rm -p 4222:4222 nats:latest
+# Docker (mounts the included config)
+docker run --rm -p 4222:4222 -p 8080:8080 -p 8222:8222 \
+  -v "$PWD/nats.conf:/nats.conf" nats:latest -c /nats.conf
 
-# macOS / Homebrew
-brew install nats-server && nats-server
-
-# Go (installs the binary to ~/go/bin)
-go install github.com/nats-io/nats-server/v2@latest && ~/go/bin/nats-server
+# or, with a locally installed nats-server
+nats-server -c nats.conf
 ```
 
-It listens on `nats://127.0.0.1:4222` by default. To point the app elsewhere,
-set `NATS_URL` for both the service and the subscriber.
+You should see `Listening for websocket clients on ws://0.0.0.0:8080`.
 
 ### 2) Backend — the TODO service
 
 ```bash
 cd backend
 go run .
-# -> connected to NATS at nats://127.0.0.1:4222 -- publishing todo.* events
-# -> TODO service listening on http://localhost:8080
+# -> todo-service connected to NATS at nats://127.0.0.1:4222
+# -> listening for commands on todo.cmd.*  /  broadcasting events on todo.event.*
 ```
 
-### 3) The event subscriber (a second terminal)
+### 3) The event subscriber (a second terminal, optional)
 
 ```bash
 cd backend
 go run ./subscriber
-# -> todo-subscriber listening on nats://127.0.0.1:4222 for "todo.>"
+# -> todo-subscriber listening for "todo.event.>"
 ```
 
 ### 4) Frontend — React + Vite (a third terminal)
 
 ```bash
 cd frontend
-npm install      # first time only
+npm install      # first time only (adds nats.ws)
 npm run dev
 # -> open http://localhost:5173
 ```
 
-Now add / finish / edit / delete tasks in the browser and watch the events
-appear in the subscriber's terminal in real time. Or test with curl:
-
-```bash
-curl -X POST localhost:8080/api/todos -H 'Content-Type: application/json' -d '{"title":"Buy milk"}'
-```
-
-> Note: a fresh checkout has no `go.sum`. The first `go run`/`go build`
-> downloads dependencies automatically; you can also run `go mod tidy` to
-> generate it explicitly.
+**Try the payoff:** open the app in **two browser tabs**. Add or finish a task in
+one — the other updates instantly, because both subscribe to `todo.event.>`.
 
 ## Project layout
 
 ```
 todo_list/
+├── nats.conf               # NATS server config (enables WebSocket on 8080)
 ├── backend/
 │   ├── go.mod
-│   ├── main.go            # server setup, routes, CORS, sample data
-│   ├── handlers.go        # one function per REST endpoint (+ publish)
-│   ├── store.go           # in-memory "DB"
-│   ├── models.go          # the Todo struct
-│   ├── events.go          # NATS publisher + CloudEvents envelope
+│   ├── main.go             # connect NATS, subscribe to todo.cmd.*, block
+│   ├── handlers.go         # Service: NATS command handlers (request-reply)
+│   ├── store.go            # in-memory "DB"
+│   ├── models.go           # the Todo struct
+│   ├── events.go           # publishEvent: CloudEvent on todo.event.*
 │   └── subscriber/
-│       └── main.go        # standalone program that logs todo.* events
+│       └── main.go         # standalone logger of todo.event.>
 └── frontend/
-    ├── package.json
-    ├── vite.config.js     # dev server + /api proxy
+    ├── package.json        # depends on nats.ws
+    ├── vite.config.js      # no /api proxy any more
     ├── index.html
     └── src/
         ├── main.jsx
-        ├── App.jsx        # the whole UI (add / edit / finish / delete)
-        ├── api.js         # the ONLY file that calls the backend
-        └── index.css      # notepad styling
+        ├── App.jsx         # UI; subscribes to events for live updates
+        ├── api.js          # NATS client (request-reply + subscribe)
+        └── index.css
 ```
 
-## REST vs NATS — what actually changed
+## What it took to drop REST (the honest trade-offs)
 
-The browser still talks to the service over REST. What's new is a *second*,
-one-way channel:
+Going all-NATS for a browser app is very doable, but you pay for what REST gave free:
 
-- **REST** is a conversation: the caller waits for a reply, and exactly one
-  service handles each request.
-- **NATS** is a broadcast: the service announces "a todo was created" and
-  walks away. Zero, one, or many subscribers can react — and you can add or
-  restart subscribers without touching the publisher.
+- **You must run a broker** — there's no "just hit the URL". No NATS, no app.
+- **The browser needs WebSocket** + a NATS client library (`nats.ws`), so the JS bundle is larger.
+- **You re-invent request/response** — commands need request-reply, and since there
+  are no HTTP status codes you carry success/failure in your own `{ok,error}` envelope.
 
-That decoupling is the payoff. The `todo-subscriber` shares no code and no
-memory with the service; only the subject name (`todo.created`) connects them.
+What you gain:
 
-## Possible next steps
+- **Live updates for free** — broadcasting `todo.event.*` means every tab/client stays in sync.
+- **Easy fan-out** — add another subscriber (analytics, notifications) without touching the service.
 
-- **JetStream** — turn on NATS persistence so events are stored and can be
-  replayed (a subscriber that starts later still sees past events).
-- **Live UI updates** — expose NATS over WebSocket and subscribe from React,
-  so a change in one browser tab instantly updates every other tab.
+Note how little moved: on the frontend **only `src/api.js` changed**; `App.jsx` just
+added one subscription. On the backend the handlers went from `(w, r)` to `(*nats.Msg)`,
+but the store and the Todo model are untouched.
