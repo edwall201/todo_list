@@ -1,5 +1,5 @@
 // Command todo-subscriber is a standalone program that listens for the
-// todo.* CloudEvents published by the TODO service and prints them.
+// todo.event.* CloudEvents published by the TODO service and prints them.
 //
 // It shares NO code and NO memory with the service -- the only thing
 // connecting them is the NATS subject. That decoupling is the whole
@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
@@ -33,7 +34,18 @@ func main() {
 		url = nats.DefaultURL
 	}
 
-	nc, err := nats.Connect(url, nats.Name("todo-subscriber"))
+	// Retry so the subscriber can start before the broker is ready
+	// (e.g. under docker compose).
+	var nc *nats.Conn
+	var err error
+	for attempt := 1; attempt <= 30; attempt++ {
+		nc, err = nats.Connect(url, nats.Name("todo-subscriber"))
+		if err == nil {
+			break
+		}
+		log.Printf("waiting for NATS at %s (attempt %d/30): %v", url, attempt, err)
+		time.Sleep(time.Second)
+	}
 	if err != nil {
 		log.Fatalf("could not connect to NATS at %s: %v", url, err)
 	}

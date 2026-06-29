@@ -62,11 +62,28 @@ Each event is a CloudEvents v1.0 JSON envelope (`specversion`, `id`, `source`, `
 
 ## Requirements
 
+- **Docker** (optional, but the easiest) — `docker compose up` runs the whole stack; then you don't need Go, Node, or NATS installed locally.
 - **Go** 1.25 or newer
 - **Node.js** 18 or newer + npm
 - A **NATS server** — now **required** (it's the only transport), and it must have WebSocket enabled. The included `nats.conf` does that.
 
-## Run it
+## Run with Docker (one command)
+
+Everything — NATS (with WebSocket), the Go service, the subscriber, and the
+frontend — is wired up in `docker-compose.yml`:
+
+```bash
+docker compose up --build
+```
+
+Then:
+
+- App: http://localhost:5173
+- NATS monitoring: http://localhost:8222
+- Watch events live: `docker compose logs -f subscriber`
+- Stop everything: `docker compose down`
+
+## Run it manually (without Docker)
 
 ### 1) NATS server (with WebSocket)
 
@@ -114,8 +131,10 @@ one — the other updates instantly, because both subscribe to `todo.event.>`.
 
 ```
 todo_list/
+├── docker-compose.yml      # runs the whole stack with one command
 ├── nats.conf               # NATS server config (enables WebSocket on 8080)
 ├── backend/
+│   ├── Dockerfile          # builds the service + subscriber
 │   ├── go.mod
 │   ├── main.go             # connect NATS, subscribe to todo.cmd.*, block
 │   ├── handlers.go         # Service: NATS command handlers (request-reply)
@@ -125,6 +144,7 @@ todo_list/
 │   └── subscriber/
 │       └── main.go         # standalone logger of todo.event.>
 └── frontend/
+    ├── Dockerfile          # builds the app, serves it with nginx
     ├── package.json        # depends on nats.ws
     ├── vite.config.js      # no /api proxy any more
     ├── index.html

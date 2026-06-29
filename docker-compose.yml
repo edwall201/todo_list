@@ -1,0 +1,48 @@
+# Runs the whole stack with one command:
+#
+#   docker compose up --build
+#
+# then open http://localhost:5173
+#
+# Services:
+#   nats        the broker, with WebSocket enabled (see nats.conf)
+#   backend     the Go TODO service (request-reply on todo.cmd.*)
+#   subscriber  a standalone logger of todo.event.* (same image, other command)
+#   frontend    the React app, built and served by nginx
+
+services:
+  nats:
+    image: nats:latest
+    command: ["-c", "/nats.conf"]
+    volumes:
+      - ./nats.conf:/nats.conf:ro
+    ports:
+      - "4222:4222"   # NATS clients (the Go service)
+      - "8080:8080"   # WebSocket (the browser connects here)
+      - "8222:8222"   # monitoring -> http://localhost:8222
+
+  backend:
+    build: ./backend
+    image: todo-backend
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on:
+      - nats
+    restart: on-failure
+
+  subscriber:
+    build: ./backend
+    image: todo-backend
+    command: ["/app/subscriber"]
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on:
+      - nats
+    restart: on-failure
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend

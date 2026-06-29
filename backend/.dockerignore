@@ -1,0 +1,6 @@
+# Don't copy local build artifacts into the image build context.
+todo-backend
+subscriber/subscriber
+*.db
+Dockerfile
+.dockerignore
