@@ -172,3 +172,5 @@ What you gain:
 Note how little moved: on the frontend **only `src/api.js` changed**; `App.jsx` just
 added one subscription. On the backend the handlers went from `(w, r)` to `(*nats.Msg)`,
 but the store and the Todo model are untouched.
+
+_Last updated: 2026-07-02._
